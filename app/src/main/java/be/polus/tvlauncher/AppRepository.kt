@@ -20,12 +20,12 @@ class AppRepository(private val context: Context) {
             .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.label })
     }
 
+    @Suppress("DEPRECATION")
     private fun queryLeanbackActivities(pm: PackageManager): List<ResolveInfo> {
         val query = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LEANBACK_LAUNCHER)
         return if (Build.VERSION.SDK_INT >= 33) {
             pm.queryIntentActivities(query, PackageManager.ResolveInfoFlags.of(0))
         } else {
-            @Suppress("DEPRECATION")
             pm.queryIntentActivities(query, 0)
         }
     }
