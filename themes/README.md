@@ -57,7 +57,7 @@ A new key needs one there in the same pull request.
 | `input_action` | string | Action sent with an HDMI/AV row's channel URI when nothing handles the standard `VIEW` (XGIMI: `com.xgimi.action.hdmiPlayer`). Only a handler-less set gets here; any app that claims the channel MIME type takes the row instead, so check with `query-activities` ([#805](https://github.com/Gathin23/cleanyourtv/issues/805)) |
 | `input_uri_scheme` | string | Scheme an HDMI/AV row's passthrough URI is sent with instead of `content://`, with no MIME type (YaOS: `live-tv`, which its source player answers) |
 | `input_sources` | list | Vendor source numbers for the Inputs menu, `HW<n>=<number>` by the input id's last part; a mapped input opens by sending `input_action` with the number as the int extra `input`, and `HW<n>=-` leaves a port the set doesn't have out of the menu. Xiaomi/Redmi China firmware: [redmi-mitv-mftp0](../examples/redmi-mitv-mftp0/) |
-| `columns` | 1 to 8 | Tiles per row; tiles shrink to fit from 5 up |
+| `columns` | 1 to 9 | Tiles per row; tiles shrink to fit from 5 up |
 | `rows_below_dock` | 0 to 3 | Grid rows left visible under the dock; tiles shrink if the dock, its title and that many rows would not fit the screen height |
 | `dock_title` | bool | The focused dock app's name in large type above the dock (`true`); `false` keeps only the glow |
 | `dock_row` | bool | The dock as its own row with a band (`true`); `false` makes the dock apps the first tiles of one plain grid |
@@ -145,6 +145,15 @@ A new key needs one there in the same pull request.
 | `cinematic_white_focus` | bool | With `cinematic_home`, the focus highlight stays white on the dock instead of taking the focused app's colour (`false` by default); `app_glow` still colours every tile |
 | `cinematic_scrim` | 0 to 100 | With `cinematic_home`, the strength of the dark scrim behind the shelf's name (`100` by default); lower lets a wallpaper show through |
 | `cinematic_art` | 0 to 100 | With `cinematic_home`, the opacity of the focused app's softened artwork (`50` by default); `0` leaves the wallpaper uncovered |
+| `bottom_shade` | 0 to 100 | A soft dark gradient over the bottom tenth of the screen, easing in from transparent to this strength at the edge, with no line where it starts; the wallpaper stays visible through it (`0` by default, nothing drawn) |
+| `tile_alpha_idle` | 0 to 1 | Opacity of the app tiles, dock and grid, while they are not focused, so a wallpaper shows through them at rest (`1.0` by default, unchanged) |
+| `tile_alpha_focus` | 0 to 1 | Opacity of the focused tile; it fades between the two in 180 ms, without overshoot (`1.0` by default) |
+| `tile_grayscale_idle` | 0 to 1 | How grey the tiles are while not focused, from their own colours (`0.0`, the default) to greyscale (`1.0`); the focused tile fades back to full colour with `tile_alpha_focus`. A colour filter on the tile's artwork, no extra bitmap |
+| `dock_only` | bool | Home shows only the dock: the other apps leave Home, and an "All apps" tile after the dock apps opens the App library; Back returns to that tile. Pair it with `app_library` and `library_ok_opens`, and leave a column free for the tile (`false` by default) |
+| `library_grid` | bool | The App library as a taller panel with a grid that scrolls up and down, its apps drawn as Home tiles by the dock's own tile code: the same artwork, rest look (`tile_alpha_idle`, `tile_grayscale_idle`) and focus zoom, the focused app's name in the line above (`false` by default) |
+| `library_grayscale` | bool | With `library_grid`, whether its tiles turn grey at rest like the Home tiles (`tile_grayscale_idle`); `false` keeps the library in colour, with the same opacity and focus look (`true` by default) |
+| `library_tile_alpha_idle` | 0 to 1 | With `library_grid`, its tiles' opacity at rest; unset follows `tile_alpha_idle`, `1.0` keeps the library opaque while Home's tiles stay see-through |
+| `dock_bottom_margin_dp` | -1 to 300 | How far above the bottom edge the dock's tiles end, in dp, with `rows_below_dock` 0; keep about 16 for the band and the focus zoom (`-1` by default, the layout as it is) |
 | `dock_even_padding` | bool | The dock band's padding equals the gap between its tiles on all four sides, as far as the grid's edges leave room (`false` by default) |
 | `dock_glass` | bool | The dock band as light frosted glass like the top bar's pills (`false` by default); suits `sky_intensity` or a wallpaper, where the solid band reads as a dark slab |
 | `dock_band` | bool | Draw the dock band and its edge (`true` by default); `false` leaves the tiles floating on the wallpaper with no band, border or dark slab |

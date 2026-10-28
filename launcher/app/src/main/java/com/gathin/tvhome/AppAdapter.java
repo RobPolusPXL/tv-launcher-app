@@ -24,6 +24,10 @@ import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewOutlineProvider;
+import android.animation.ValueAnimator;
+import android.graphics.ColorFilter;
+import android.graphics.ColorMatrix;
+import android.graphics.ColorMatrixColorFilter;
 import android.view.animation.DecelerateInterpolator;
 import android.view.animation.OvershootInterpolator;
 import android.widget.FrameLayout;
@@ -66,7 +70,7 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     }
 
     static final class Entry {
-        static final int APP = 0, HOME_SETTINGS = 1, CARD = 2, EMPTY = 3;
+        static final int APP = 0, HOME_SETTINGS = 1, CARD = 2, EMPTY = 3, LIBRARY = 4;
 
         final int kind;
         final String label;
@@ -188,6 +192,17 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     private final boolean singleRow;
     /** config always_show_names: the alpha of an unfocused tile's name (0 hides it). */
     private final float restNameAlpha;
+    /** tile_alpha_idle and tile_alpha_focus: a tile's opacity at rest and while focused (1 and 1 change nothing). */
+    private final float idleAlpha;
+    private final float focusAlpha;
+    /** tile_grayscale_idle: how grey an unfocused tile is (0 leaves the colours alone). */
+    private final float idleGray;
+    /** dock_only: Home keeps the dock apps and ends them with an "All apps" tile instead of the library pill. */
+    private final boolean dockOnly;
+    /** library_grayscale: whether the App library's grid tiles turn grey at rest too (else only their opacity). */
+    private final boolean libraryGrayscale;
+    /** library_tile_alpha_idle: the library grid's tiles at rest (tile_alpha_idle unless a theme sets it). */
+    private final float libraryIdleAlpha;
     /** cinematic_home: only then does a launch record the last-opened app the shelf uses. */
     private final boolean cinematic;
     /** Dock order (config.xml dock_apps, or a theme's config.json). */
@@ -233,7 +248,7 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         this.animations = cfg.animations;
         this.advancedEffects = cfg.animations && cfg.advancedEffects;
         this.showHomeSettings = cfg.showHomeSettingsShortcut;
-        this.showLibrary = LibraryApps.showPill(cfg.appLibrary, cfg.libraryButton, cfg.showLibraryPill);
+        this.showLibrary = !cfg.dockOnly && LibraryApps.showPill(cfg.appLibrary, cfg.libraryButton, cfg.showLibraryPill);
         this.reducedMotion = cfg.reducedMotion;
         this.focusOvershoot = cfg.focusOvershoot;
         this.rowsBelowDock = cfg.rowsBelowDock;
@@ -241,6 +256,12 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         this.dockRow = cfg.dockRow;
         this.singleRow = cfg.singleRow;
         this.restNameAlpha = cfg.alwaysShowNames ? 0.75f : 0f;
+        this.idleAlpha = cfg.tileAlphaIdle;
+        this.focusAlpha = cfg.tileAlphaFocus;
+        this.idleGray = cfg.tileGrayscaleIdle;
+        this.dockOnly = cfg.dockOnly;
+        this.libraryGrayscale = cfg.libraryGrayscale;
+        this.libraryIdleAlpha = cfg.libraryTileAlphaIdle;
         this.cinematic = cfg.cinematicHome;
         this.launchActions = cfg.launchActions;
         this.iconTiles = new HashSet<>(Arrays.asList(ctx.getResources().getStringArray(R.array.icon_tiles)));
@@ -296,15 +317,9 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             String label = card != null ? card.label : Cards.cleanLabel(
                     appLabels.containsKey(pkg) ? appLabels.get(pkg) : String.valueOf(ri.loadLabel(pm)), pkg);
             if (!seen.add(pkg + '\n' + label)) continue;
-            Drawable banner = null;
-            // uniform_tiles draws the icon, so an app's banner is never loaded. A module card keeps its banner.
-            if (!(uniformTiles && card == null)) {
-                banner = bundledBanner(appBanners.get(pkg));
-                if (banner == null) banner = iconTiles.contains(pkg) ? iconBanner(ri.loadIcon(pm)) : loadBanner(pm, ri);
-            }
-            // The icon is only drawn (and sampled for the glow) when there is no banner, so a tile with a
-            // banner skips loading and decoding it.
-            Drawable icon = banner == null ? ri.loadIcon(pm) : null;
+            Drawable[] art = art(ri, card != null);
+            Drawable banner = art[0];
+            Drawable icon = art[1];
             if (card != null) {
                 fresh.add(new Entry(Entry.CARD, label, component, banner, icon, card.caption, card.accent));
             } else {
@@ -326,8 +341,16 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             if (ca != cb) return ca ? -1 : 1;
             return a.label.compareToIgnoreCase(b.label);
         });
+        // dock_only: only the dock stays on Home, and an "All apps" tile after it opens the library.
+        if (dockOnly) {
+            List<Entry> dock = new ArrayList<>();
+            for (Entry e : fresh) if (isDocked(e)) dock.add(e);
+            fresh = dock;
+            fresh.add(new Entry(Entry.LIBRARY, ctx.getString(R.string.all_apps), new ComponentName(ctx, "all-apps"),
+                    null, ctx.getDrawable(R.drawable.ic_apps), null, 0));
+        }
         // Retain the optional Default-home tile until dependent tile-ordering work is merged.
-        if (showHomeSettings
+        if (showHomeSettings && !dockOnly
                 && pm.resolveActivity(new Intent(Settings.ACTION_HOME_SETTINGS), 0) != null) {
             fresh.add(new Entry(Entry.HOME_SETTINGS, ctx.getString(R.string.home_settings),
                     new ComponentName(ctx, HomeSettingsActivity.class), null,
@@ -343,6 +366,23 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         items.clear();
         items.addAll(fresh);
         notifyDataSetChanged();
+    }
+
+    /**
+     * The artwork a tile shows for this app, {banner, icon}: one rule for Home and for the App library's grid.
+     * uniform_tiles draws the icon, so an app's banner is never loaded (a module card keeps its banner). The icon is
+     * only drawn (and sampled for the glow) when there is no banner, so a tile with a banner skips decoding it.
+     */
+    Drawable[] art(ResolveInfo ri, boolean keepBanner) {
+        PackageManager pm = ctx.getPackageManager();
+        String pkg = ri.activityInfo.packageName;
+        Drawable banner = null;
+        if (!uniformTiles || keepBanner) {
+            banner = bundledBanner(appBanners.get(pkg));
+            if (banner == null) banner = iconTiles.contains(pkg) ? iconBanner(ri.loadIcon(pm)) : loadBanner(pm, ri);
+        }
+        Drawable icon = banner == null ? ri.loadIcon(pm) : null;
+        return new Drawable[] {banner, icon};
     }
 
     /** icon_tiles: the app's icon centred on a dark banner-shaped tile, for apps whose own banner crops badly. */
@@ -415,7 +455,31 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         float density = parent.getResources().getDisplayMetrics().density;
         int width = parent.getWidth() > 0 ? parent.getWidth() : parent.getMeasuredWidth();
         int inner = width - parent.getPaddingLeft() - parent.getPaddingRight();
-        int w = tileWidthPx(inner, parent.getHeight(), dockSize, rowsBelowDock, dockTitle, dockRow, density), h = tileHeightPx(w);
+        int w = tileWidthPx(inner, parent.getHeight(), dockSize, rowsBelowDock, dockTitle, dockRow, density);
+        sizeTile(v, w, density);
+        // A sideways row would stretch a match_parent item across the whole screen: give it a grid column's width.
+        if (singleRow) v.getLayoutParams().width = inner / dockSize;
+        return new Holder(v, listener, animations, advancedEffects, reducedMotion, restNameAlpha, focusOvershoot,
+                idleAlpha, focusAlpha, idleGray);
+    }
+
+    /**
+     * library_grid: a Home tile for the App library's grid, from item_app.xml and the same Holder as the dock, so the
+     * artwork, the rest/focus look and the focus animation are the dock's. Its name stays hidden, as in the dock.
+     */
+    Holder newTile(ViewGroup parent, int tileWidthPx, TileListener tileListener) {
+        View v = LayoutInflater.from(parent.getContext()).inflate(R.layout.item_app, parent, false);
+        sizeTile(v, tileWidthPx, parent.getResources().getDisplayMetrics().density);
+        Holder h = new Holder(v, tileListener, animations, advancedEffects, reducedMotion, 0f, focusOvershoot,
+                libraryIdleAlpha, focusAlpha, libraryGrayscale ? idleGray : 0f);
+        h.inDock = true;
+        h.name.setVisibility(View.GONE);
+        return h;
+    }
+
+    /** Sizes item_app.xml's card, name and icon for a tile w pixels wide (Home and the library grid alike). */
+    private void sizeTile(View v, int w, float density) {
+        int h = tileHeightPx(w);
         View card = v.findViewById(R.id.card);
         ViewGroup.LayoutParams cardLp = card.getLayoutParams();
         cardLp.width = w;
@@ -432,8 +496,6 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             v.setPadding(v.getPaddingLeft(), pad, v.getPaddingRight(), pad);
         }
         name.setLayoutParams(nameLp);
-        // A sideways row would stretch a match_parent item across the whole screen: give it a grid column's width.
-        if (singleRow) v.getLayoutParams().width = inner / dockSize;
         if (uniformTiles) {
             // tvOS-style tile: a large centred mark, no caption inside the card.
             View icon = v.findViewById(R.id.icon);
@@ -452,7 +514,6 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             View label = v.findViewById(R.id.label);
             label.setPadding(label.getPaddingLeft(), label.getPaddingTop(), label.getPaddingRight(), Math.round(4f * density));
         }
-        return new Holder(v, listener, animations, advancedEffects, reducedMotion, restNameAlpha, focusOvershoot);
     }
 
     @Override
@@ -479,36 +540,16 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         boolean dockKind = dockRow && (singleRow || position < dockSize);
         h.name.setVisibility(dockKind && restNameAlpha == 0f ? View.INVISIBLE : View.VISIBLE);
         h.inDock = dockKind;
-        boolean focused = h.card.isFocused();   // a rebind after reload() can hit the focused tile
-        h.name.setAlpha(focused ? 1f : restNameAlpha);
-        h.card.setScaleX(focused && animations ? focusScale() : 1f);
-        h.card.setScaleY(focused && animations ? focusScale() : 1f);
-        h.card.setTranslationY(focused && advancedEffects && !dockKind ? -4f * ctx.getResources().getDisplayMetrics().density : 0f);
-        h.card.setTranslationZ(focused && advancedEffects ? 8f * ctx.getResources().getDisplayMetrics().density : 0f);
-        h.banner.setScaleX(focused && advancedEffects ? 1.035f : 1f);
-        h.banner.setScaleY(focused && advancedEffects ? 1.035f : 1f);
-        // A fully opaque banner covers the whole card (centerCrop), so the card's own fill under it is drawn for
-        // nothing on every frame; keep it under banners with transparent parts and under icon tiles.
-        h.card.setBackground(e.banner != null && e.banner.getOpacity() == PixelFormat.OPAQUE ? null : h.cardBackground);
+        h.name.setAlpha(h.card.isFocused() ? 1f : restNameAlpha);
+        Drawable backdrop = null;
         if (uniformTiles && e.banner == null) {
             if (e.backdrop == null) e.backdrop = backdrop(e.icon, ambientColorAt(position));
-            h.card.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, e.backdrop));
+            backdrop = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, e.backdrop);
         }
-        if (e.banner != null) {
-            h.banner.setImageDrawable(e.banner);
-            h.banner.setVisibility(View.VISIBLE);
-            h.icon.setVisibility(View.GONE);
-            h.label.setVisibility(View.GONE);
-        } else {
-            h.banner.setImageDrawable(null);
-            h.banner.setVisibility(View.GONE);
-            h.icon.setImageDrawable(e.icon);
-            h.icon.setVisibility(View.VISIBLE);
-            h.label.setText(e.label);
-            h.label.setVisibility(uniformTiles ? View.GONE : View.VISIBLE);
-        }
+        bindLook(h, e.banner, e.icon, e.label, backdrop);
         h.card.setOnClickListener(v -> launch(e));
         h.card.setOnLongClickListener(v -> {
+            if (e.kind == Entry.LIBRARY) return true;   // not an app: no menu, no App info
             if (tileMenu) {
                 int pos = h.getBindingAdapterPosition();
                 if (pos != RecyclerView.NO_POSITION) listener.onTileLongPress(pos, v);
@@ -524,8 +565,46 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         });
     }
 
+    /**
+     * A tile's look, shared by Home and the App library's grid: the banner, or the icon with the app's name inside the
+     * card, the card's fill under them, and the rest or focus state (opacity, colour, zoom) for the tile as it stands.
+     */
+    void bindLook(Holder h, Drawable bannerArt, Drawable iconArt, String label, Drawable backdrop) {
+        boolean focused = h.card.isFocused();   // a rebind after reload() can hit the focused tile
+        boolean dockKind = h.inDock;
+        if (h.focusAnim != null) h.focusAnim.cancel();
+        h.setFocusAmount(focused ? 1f : 0f);
+        h.card.setScaleX(focused && animations ? focusScale() : 1f);
+        h.card.setScaleY(focused && animations ? focusScale() : 1f);
+        h.card.setTranslationY(focused && advancedEffects && !dockKind ? -4f * ctx.getResources().getDisplayMetrics().density : 0f);
+        h.card.setTranslationZ(focused && advancedEffects ? 8f * ctx.getResources().getDisplayMetrics().density : 0f);
+        h.banner.setScaleX(focused && advancedEffects ? 1.035f : 1f);
+        h.banner.setScaleY(focused && advancedEffects ? 1.035f : 1f);
+        // A fully opaque banner covers the whole card (centerCrop), so the card's own fill under it is drawn for
+        // nothing on every frame; keep it under banners with transparent parts and under icon tiles.
+        h.card.setBackground(bannerArt != null && bannerArt.getOpacity() == PixelFormat.OPAQUE ? null : h.cardBackground);
+        if (backdrop != null) h.card.setBackground(backdrop);
+        if (bannerArt != null) {
+            h.banner.setImageDrawable(bannerArt);
+            h.banner.setVisibility(View.VISIBLE);
+            h.icon.setVisibility(View.GONE);
+            h.label.setVisibility(View.GONE);
+        } else {
+            h.banner.setImageDrawable(null);
+            h.banner.setVisibility(View.GONE);
+            h.icon.setImageDrawable(iconArt);
+            h.icon.setVisibility(View.VISIBLE);
+            h.label.setText(label);
+            h.label.setVisibility(uniformTiles ? View.GONE : View.VISIBLE);
+        }
+    }
+
     /** Opens the tile's activity by explicit component, with no extras: a card can name nothing else. */
     private void launch(Entry e) {
+        if (e.kind == Entry.LIBRARY) {
+            listener.onLibraryRequested();
+            return;
+        }
         if (e.kind == Entry.HOME_SETTINGS) {
             ctx.startActivity(new Intent(ctx, HomeSettingsActivity.class)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
@@ -569,6 +648,12 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
 
     boolean isLibraryAt(int position) { return showLibrary && position == items.size(); }
 
+    /** dock_only: the position of the "All apps" tile, or -1 when Home has none. */
+    int libraryTilePosition() {
+        for (int i = 0; i < items.size(); i++) if (items.get(i).kind == Entry.LIBRARY) return i;
+        return -1;
+    }
+
     @Override public int getItemViewType(int position) { return isLibraryAt(position) ? 1 : 0; }
 
     boolean containsPackage(String pkg) {
@@ -592,6 +677,7 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
      * the owner moved into the dock stays there (#499); else a dock_apps entry.
      */
     private boolean isDocked(Entry e) {
+        if (e.kind == Entry.LIBRARY) return true;   // dock_only: the "All apps" tile ends the dock row
         if (savedDocked < 0) return favourites.contains(e.pkg);
         Integer rank = savedRanks.get(e.component.flattenToShortString());
         return rank != null && rank < savedDocked;
@@ -609,7 +695,7 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     /** Tiles that can be moved: everything but the "Default home" tile, which always stays last. */
     int movableCount() {
         int n = items.size();
-        return n > 0 && items.get(n - 1).kind == Entry.HOME_SETTINGS ? n - 1 : n;
+        return n > 0 && (items.get(n - 1).kind == Entry.HOME_SETTINGS || items.get(n - 1).kind == Entry.LIBRARY) ? n - 1 : n;
     }
 
     /** Keys of the movable tiles in their current order, for Order (empty dock slots are not tiles). */
@@ -895,11 +981,19 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         /** Alpha of the name while the tile is not focused (always_show_names). */
         final float restNameAlpha;
         final boolean overshoot;
+        /** tile_alpha_idle / tile_alpha_focus and tile_grayscale_idle, and the fade between rest and focus (its own
+         *  animator: the zoom may overshoot). focusAmount is 0 at rest and 1 focused; -1 before the first bind. */
+        final float idleAlpha;
+        final float focusAlpha;
+        final float idleGray;
+        ValueAnimator focusAnim;
+        float focusAmount = -1f;
         /** A dock tile: it grows in place without advanced_effects' lift, which reads as off-centre in the band (#2135). */
         boolean inDock;
 
         Holder(View v, TileListener listener, boolean animations, boolean advancedEffects,
-               boolean reducedMotion, float restNameAlpha, boolean overshoot) {
+               boolean reducedMotion, float restNameAlpha, boolean overshoot, float idleAlpha, float focusAlpha,
+               float idleGray) {
             super(v);
             card = v.findViewById(R.id.card);
             cardBackground = card.getBackground();
@@ -912,6 +1006,9 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             this.reducedMotion = reducedMotion;
             this.restNameAlpha = restNameAlpha;
             this.overshoot = overshoot;
+            this.idleAlpha = idleAlpha;
+            this.focusAlpha = focusAlpha;
+            this.idleGray = idleGray;
 
             final float density = v.getResources().getDisplayMetrics().density;
             card.setOutlineProvider(new ViewOutlineProvider() {
@@ -935,6 +1032,7 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 view.animate().cancel();
                 banner.animate().cancel();
                 name.animate().cancel();
+                fadeTo(focused);
                 float scale = !animations ? 1f : advancedEffects ? 1.12f : 1.10f;
                 float s = focused ? scale : 1f;
                 if (!animations) {
@@ -981,6 +1079,39 @@ public class AppAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                     listener.onTileFocused(pos, view);
                 }
             });
+        }
+
+        /** Opacity and colour for this much focus: idle values at 0, focused ones at 1. No filter at full colour. */
+        void setFocusAmount(float f) {
+            focusAmount = f;
+            card.setAlpha(idleAlpha + (focusAlpha - idleAlpha) * f);
+            if (idleGray <= 0f) return;
+            float saturation = 1f - idleGray * (1f - f);
+            ColorFilter filter = null;
+            if (saturation < 1f) {
+                ColorMatrix matrix = new ColorMatrix();
+                matrix.setSaturation(saturation);
+                filter = new ColorMatrixColorFilter(matrix);
+            }
+            banner.setColorFilter(filter);
+            icon.setColorFilter(filter);
+        }
+
+        /** A short, soft fade between rest and focus with no overshoot; a jump with animations or motion reduced. */
+        private void fadeTo(boolean focused) {
+            if (focusAnim != null) focusAnim.cancel();
+            focusAnim = null;
+            float target = focused ? 1f : 0f;
+            boolean noEffect = idleAlpha == focusAlpha && idleGray <= 0f;
+            if (noEffect || focusAmount < 0f || focusAmount == target || !animations || reducedMotion) {
+                setFocusAmount(target);
+                return;
+            }
+            focusAnim = ValueAnimator.ofFloat(focusAmount, target);
+            focusAnim.setDuration(180);
+            focusAnim.setInterpolator(new DecelerateInterpolator());
+            focusAnim.addUpdateListener(a -> setFocusAmount((float) a.getAnimatedValue()));
+            focusAnim.start();
         }
     }
 }

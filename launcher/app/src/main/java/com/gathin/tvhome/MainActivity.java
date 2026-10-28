@@ -329,6 +329,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private AppLibraryDialog appLibrary;
     private boolean appLibrarySelection;
     private boolean libraryOkOpens;
+    /** library_grid: the App library as a grid. */
+    private boolean libraryGrid;
     private boolean libraryFocusPending;
     private RecyclerView.OnScrollListener pendingFocusScroll;
 
@@ -427,6 +429,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         homeAppKeys = RemoteKeys.parseAppKeys(cfg.appKeys);
         appLibrarySelection = cfg.appLibrarySelection;
         libraryOkOpens = cfg.libraryOkOpens;
+        libraryGrid = cfg.libraryGrid;
         // restore_key_services: after a force stop, put back the remote's accessibility helpers that Android took
         // off the list (needs WRITE_SECURE_SETTINGS, granted by build-and-install with RESTORE_KEY_SERVICES=1).
         if (cfg.restoreKeyServices) ServiceRepair.restore(this);
@@ -493,6 +496,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         cinematicWhiteFocus = cfg.cinematicWhiteFocus;
         heroArtAlpha = cfg.cinematicArt / 100f;
         if (cinematic) setUpCinematicShelf(cfg.cinematicScrim);
+        setUpBottomShade(cfg.bottomShade);
         // dock_title false: the name above the dock (and the cinematic lines under it) never shows; the glow
         // still follows the dock.
         if (!cfg.dockTitle) hero.setVisibility(View.GONE);
@@ -668,6 +672,12 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             // A single row never shows the names under its tiles (the title above the row names the app), so the
             // 7dp gap and 22dp label item_app.xml keeps for them would only lift the row: sit it that much lower.
             if (singleRow && !cfg.alwaysShowNames) want += (int) (29 * density);
+            // dock_bottom_margin_dp: the dock's tiles end that far above the bottom edge. The tile starts under
+            // DockDecoration's 6dp and item_app.xml's 8dp padding; the room for names under it is left out.
+            if (cfg.dockBottomMarginDp >= 0 && MainActivity.this.dockRow && rowsBelowDock == 0) {
+                want = Math.max(shelfClearance, h - AppAdapter.tileHeightPx(tileW)
+                        - (int) ((cfg.dockBottomMarginDp + 6 + 8) * density));
+            }
             if (grid.getPaddingTop() != want) {
                 grid.setPadding(grid.getPaddingLeft(), want, grid.getPaddingRight(), grid.getPaddingBottom());
                 // A vertical grid parks the dock on the new padding line by scrolling (onTileFocused); a sideways
@@ -1672,6 +1682,13 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                 btnLibraryTop.requestFocus();
                 return;
             }
+            // dock_only: Back lands on the "All apps" tile the library was opened from.
+            int libraryTile = adapter.libraryTilePosition();
+            if (libraryTile >= 0) {
+                libraryFromVpnPill = false;
+                focusTile(libraryTile);
+                return;
+            }
             boolean fromVpnPill = libraryFromVpnPill;
             libraryFromVpnPill = false;
             // The VPN pill can hide while the library is open (its VPN dropped): then focus goes as from the grid.
@@ -1683,7 +1700,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             grid.post(() -> {
                 if (libraryFocusPending && appLibrary == null && hasWindowFocus() && !isFinishing()) focusLibrary();
             });
-        }, libraryExcludedApps);
+        }, libraryExcludedApps, libraryGrid ? adapter : null);
         openPopup = appLibrary.popup;
         appLibrary.show();
     }
@@ -1904,6 +1921,29 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         BitmapDrawable scrim = new BitmapDrawable(getResources(), bmp);
         scrim.setGravity(Gravity.FILL);
         return scrim;
+    }
+
+    /**
+     * bottom_shade: the bottom tenth of the screen darkens towards the edge, easing in (alpha grows with the square of
+     * the distance) so there is no line where it starts. One GradientDrawable on a view only that tall.
+     */
+    private void setUpBottomShade(int percent) {
+        View shade = findViewById(R.id.bottomShade);
+        if (percent <= 0) {
+            shade.setVisibility(View.GONE);
+            return;
+        }
+        int alpha = percent * 255 / 100;
+        int[] colors = new int[5];
+        for (int i = 0; i < colors.length; i++) {
+            float t = i / (float) (colors.length - 1);
+            colors[i] = Math.round(alpha * t * t) << 24 | 0x060406;
+        }
+        shade.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, colors));
+        ViewGroup.LayoutParams lp = shade.getLayoutParams();
+        lp.height = getResources().getDisplayMetrics().heightPixels / 10;
+        shade.setLayoutParams(lp);
+        shade.setVisibility(View.VISIBLE);
     }
 
     /** Swaps the backdrop to this app's artwork: fade out, swap, fade in, the way the shelf's name changes. */

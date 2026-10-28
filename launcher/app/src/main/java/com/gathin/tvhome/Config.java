@@ -231,6 +231,24 @@ final class Config {
     final int cinematicArt;
     /** Strength of the cinematic shelf's dark scrim, 0 to 100 percent (config.xml, cinematic_scrim); 100 as before. */
     final int cinematicScrim;
+    /** Strength of the soft gradient over the bottom tenth of the screen, 0 to 100 percent (config.xml, bottom_shade); 0, off. */
+    final int bottomShade;
+    /** Opacity of a tile while it is not focused, 0 to 1 (config.xml, tile_alpha_idle); 1, unchanged. */
+    final float tileAlphaIdle;
+    /** Opacity of the focused tile, 0 to 1 (config.xml, tile_alpha_focus); 1, unchanged. */
+    final float tileAlphaFocus;
+    /** How far an unfocused tile is desaturated, 0 (full colour) to 1 (greyscale) (config.xml, tile_grayscale_idle). */
+    final float tileGrayscaleIdle;
+    /** Home shows only the dock, ended by an "All apps" tile that opens the App library (config.xml, dock_only). */
+    final boolean dockOnly;
+    /** The App library as a scrolling grid instead of one sideways row (config.xml, library_grid). */
+    final boolean libraryGrid;
+    /** Distance from the dock's tiles to the bottom edge, in dp (config.xml, dock_bottom_margin_dp); -1 keeps the layout. */
+    final int dockBottomMarginDp;
+    /** library_grid's tiles follow tile_grayscale_idle (config.xml, library_grayscale); false keeps them in colour. */
+    final boolean libraryGrayscale;
+    /** library_grid's tiles at rest, 0 to 1 (config.xml, library_tile_alpha_idle); unset follows tile_alpha_idle. */
+    final float libraryTileAlphaIdle;
     /** A rotating collection's groups by time of day, as file names (config.xml, wallpaper_moods); empty rotates through all of it. */
     final Map<String, Set<String>> wallpaperMoods;
     /** Shape of the glow behind the focused app (config.xml, glow_style): {@link #GLOW_RADIAL} or {@link #GLOW_HORIZON}. */
@@ -279,7 +297,9 @@ final class Config {
                    boolean keyFilter, boolean dockGlass, String glowStyle, boolean wallpaperCaptions,
                    boolean handleViewInputs, boolean tileMenu, boolean dockEvenPadding, boolean dockBand, boolean cinematicDots, boolean cinematicWhiteFocus, boolean wifiStatusColor, int cinematicScrim, int cinematicArt,
                    Map<String, Set<String>> wallpaperMoods, boolean gamepadPassthrough, boolean consumeVolumeKeys, boolean powerOnHome, boolean homeLongPressHome, boolean wifiStatusWarnings, List<String> topBarApps, boolean showGreeting, boolean headerWhite, boolean clockWallpaper, int clockWallpaperDim, boolean clockGlow, String glassStyle, boolean singleRow, boolean dockBandAll, boolean lunarDate, int lunarUtcOffset, boolean dateBelowClock, boolean vpnPill, String locale, boolean powerOnHomeAlways, boolean inputsConnectedOnly,
-                   int openOnStartNetworkWait) {
+                   int openOnStartNetworkWait, int bottomShade, float tileAlphaIdle, float tileAlphaFocus,
+                   float tileGrayscaleIdle, boolean dockOnly, boolean libraryGrid,
+                   int dockBottomMarginDp, boolean libraryGrayscale, float libraryTileAlphaIdle) {
         this.handleViewInputs = handleViewInputs;
         this.tileMenu = tileMenu;
         this.inputKeycodes = inputKeycodes;
@@ -370,6 +390,15 @@ final class Config {
         this.wifiStatusColor = wifiStatusColor;
         this.cinematicArt = cinematicArt;
         this.cinematicScrim = cinematicScrim;
+        this.bottomShade = bottomShade;
+        this.tileAlphaIdle = tileAlphaIdle;
+        this.tileAlphaFocus = tileAlphaFocus;
+        this.tileGrayscaleIdle = tileGrayscaleIdle;
+        this.dockOnly = dockOnly;
+        this.libraryGrid = libraryGrid;
+        this.dockBottomMarginDp = dockBottomMarginDp;
+        this.libraryGrayscale = libraryGrayscale;
+        this.libraryTileAlphaIdle = libraryTileAlphaIdle;
         this.wallpaperMoods = wallpaperMoods;
         this.gamepadPassthrough = gamepadPassthrough;
         this.consumeVolumeKeys = consumeVolumeKeys;
@@ -497,6 +526,16 @@ final class Config {
         boolean wifiStatusColor = res.getBoolean(R.bool.wifi_status_color);
         int cinematicArt = res.getInteger(R.integer.cinematic_art);
         int cinematicScrim = res.getInteger(R.integer.cinematic_scrim);
+        int bottomShade = res.getInteger(R.integer.bottom_shade);
+        float tileAlphaIdle = fraction(res.getString(R.string.tile_alpha_idle), 1f);
+        float tileAlphaFocus = fraction(res.getString(R.string.tile_alpha_focus), 1f);
+        float tileGrayscaleIdle = fraction(res.getString(R.string.tile_grayscale_idle), 0f);
+        boolean dockOnly = res.getBoolean(R.bool.dock_only);
+        boolean libraryGrid = res.getBoolean(R.bool.library_grid);
+        int dockBottomMarginDp = res.getInteger(R.integer.dock_bottom_margin_dp);
+        boolean libraryGrayscale = res.getBoolean(R.bool.library_grayscale);
+        // -1 until config.xml or the theme sets it: then it follows tile_alpha_idle, whichever of the two set that.
+        float libraryTileAlphaIdle = fraction(res.getString(R.string.library_tile_alpha_idle), -1f);
         Map<String, Set<String>> wallpaperMoods = moods(res.getString(R.string.wallpaper_moods));
         String glowStyle = res.getString(R.string.glow_style);
         boolean wifiStatusWarnings = res.getBoolean(R.bool.wifi_status_warnings);
@@ -538,7 +577,7 @@ final class Config {
             inputAction = string(json, "input_action", inputAction);
             inputSources = stringList(json, "input_sources", inputSources);
             inputUriScheme = string(json, "input_uri_scheme", inputUriScheme).trim();
-            columns = integer(json, "columns", columns, 1, 8);
+            columns = integer(json, "columns", columns, 1, 9);
             rowsBelow = integer(json, "rows_below_dock", rowsBelow, 0, 3);
             animations = bool(json, "animations", animations);
             advancedEffects = bool(json, "advanced_effects", advancedEffects);
@@ -605,6 +644,15 @@ final class Config {
             wifiStatusColor = bool(json, "wifi_status_color", wifiStatusColor);
             cinematicArt = integer(json, "cinematic_art", cinematicArt, 0, 100);
             cinematicScrim = integer(json, "cinematic_scrim", cinematicScrim, 0, 100);
+            bottomShade = integer(json, "bottom_shade", bottomShade, 0, 100);
+            tileAlphaIdle = fraction(json, "tile_alpha_idle", tileAlphaIdle);
+            tileAlphaFocus = fraction(json, "tile_alpha_focus", tileAlphaFocus);
+            tileGrayscaleIdle = fraction(json, "tile_grayscale_idle", tileGrayscaleIdle);
+            dockOnly = bool(json, "dock_only", dockOnly);
+            libraryGrid = bool(json, "library_grid", libraryGrid);
+            dockBottomMarginDp = integer(json, "dock_bottom_margin_dp", dockBottomMarginDp, -1, 300);
+            libraryGrayscale = bool(json, "library_grayscale", libraryGrayscale);
+            libraryTileAlphaIdle = fraction(json, "library_tile_alpha_idle", libraryTileAlphaIdle);
             JSONObject moods = json.optJSONObject("wallpaper_moods");
             if (moods != null) wallpaperMoods = moods(moods);
             wifiStatusWarnings = bool(json, "wifi_status_warnings", wifiStatusWarnings);
@@ -682,7 +730,9 @@ final class Config {
                 consumeVolumeKeys, powerOnHome, homeLongPressHome, wifiStatusWarnings, topBarApps, showGreeting, headerWhite, clockWallpaper,
                 Math.max(0, Math.min(90, clockWallpaperDim)), clockGlow, glassStyle, singleRow && dockRow, dockBandAll, lunar, lunarOffset,
                 dateBelowClock, vpnPill, locale, powerOnHomeAlways, inputsConnectedOnly,
-                Math.max(0, Math.min(600, openOnStartNetworkWait)));
+                Math.max(0, Math.min(600, openOnStartNetworkWait)), Math.max(0, Math.min(100, bottomShade)), tileAlphaIdle, tileAlphaFocus,
+                tileGrayscaleIdle, dockOnly, libraryGrid, Math.max(-1, Math.min(300, dockBottomMarginDp)),
+                libraryGrayscale, libraryTileAlphaIdle < 0f ? tileAlphaIdle : libraryTileAlphaIdle);
     }
 
     /**
@@ -830,6 +880,24 @@ final class Config {
     private static boolean bool(JSONObject o, String key, boolean fallback) {
         Object v = o.opt(key);
         return v instanceof Boolean ? (Boolean) v : fallback;
+    }
+
+    /** A number from 0 to 1 (tile_alpha_idle, tile_alpha_focus, tile_grayscale_idle); anything else keeps the fallback. */
+    private static float fraction(JSONObject o, String key, float fallback) {
+        Object v = o.opt(key);
+        if (!(v instanceof Number)) return fallback;
+        float f = ((Number) v).floatValue();
+        return f >= 0f && f <= 1f ? f : fallback;
+    }
+
+    /** The same for config.xml, which keeps these as strings: values/ has no float resource before API 29. */
+    static float fraction(String value, float fallback) {
+        try {
+            float f = Float.parseFloat(value.trim());
+            return f >= 0f && f <= 1f ? f : fallback;
+        } catch (NumberFormatException e) {
+            return fallback;
+        }
     }
 
     private static int integer(JSONObject o, String key, int fallback, int min, int max) {

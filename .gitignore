@@ -21,3 +21,14 @@ bench-results/
 *.aab
 launcher/hs_err_pid*.log
 launcher/replay_pid*.log
+
+# Persoonlijk (tv-launcher-app): eigen foto's, het thema met die foto's als wallpapers, en build-mappen.
+# work/ en backup/ staan hierboven al; deze regels maken het expliciet, ook als work/ ooit wordt opgesplitst.
+work/fotos/
+work/theme-mijn-fotos/
+work/theme-mijn-fotos/wallpapers/
+backup/
+build/
+.gradle/
+*.iml
+.idea/

@@ -113,6 +113,16 @@
         android:visibility="gone"
         android:importantForAccessibility="no" />
 
+    <!-- bottom_shade: a soft gradient over the bottom tenth, over the wallpaper and under the text and tiles.
+         Its height is set in code to a tenth of the screen. -->
+    <View
+        android:id="@+id/bottomShade"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_gravity="bottom"
+        android:visibility="gone"
+        android:importantForAccessibility="no" />
+
     <!-- Top shelf: the focused dock app's name, positioned above the dock in code. -->
     <LinearLayout
         android:id="@+id/hero"

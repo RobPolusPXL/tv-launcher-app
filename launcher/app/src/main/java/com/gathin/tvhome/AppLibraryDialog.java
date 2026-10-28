@@ -31,6 +31,7 @@ import androidx.annotation.NonNull;
 import androidx.dynamicanimation.animation.FloatPropertyCompat;
 import androidx.dynamicanimation.animation.SpringAnimation;
 import androidx.dynamicanimation.animation.SpringForce;
+import androidx.recyclerview.widget.GridLayoutManager;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
@@ -103,6 +104,15 @@ final class AppLibraryDialog {
     private float scrollOffset;
     private boolean highlightShown;
     private final int catalogWidth;
+    /** library_grid: a taller panel whose apps fill rows of gridColumns and scroll vertically, drawn as Home tiles. */
+    private final boolean grid;
+    /** library_grid: the Home adapter, whose tile code (item_app.xml, Holder, bindLook, art) draws the grid's apps. */
+    private final AppAdapter tiles;
+    /** library_grid: each bound app's {banner, icon}, loaded off the UI thread; dropped when the library closes. */
+    private final Map<String, Drawable[]> art = new HashMap<>();
+    private final Set<String> artLoading = new HashSet<>();
+    private final int catalogHeight;
+    private int gridColumns = 1;
 
     private void stopHighlight() {
         if (spring != null) spring.cancel();
@@ -115,12 +125,17 @@ final class AppLibraryDialog {
         if (highlight == null || card.getParent() == null) return;
         Rect rect = new Rect(0, 0, card.getWidth(), card.getHeight());
         shelf.offsetDescendantRectToMyCoords(card, rect);
+        // library_grid: a Home tile zooms on focus, so the glass covers the zoomed card with Home's corners.
+        float grow = grid ? (tiles.focusScale() - 1f) / 2f : 0f;
+        int padX = dp(6) + Math.round(rect.width() * grow);
+        int padY = dp(6) + Math.round(rect.height() * grow);
+        if (grid) highlight.setRadius(AppAdapter.cornerRadius(rect.width(), density) * tiles.focusScale());
         ViewGroup.LayoutParams lp = highlight.getLayoutParams();
-        lp.width = rect.width() + dp(12);
-        lp.height = rect.height() + dp(12);
+        lp.width = rect.width() + 2 * padX;
+        lp.height = rect.height() + 2 * padY;
         highlight.setLayoutParams(lp);
-        highlight.setTranslationY(rect.top - dp(6));
-        float x = rect.left - dp(6) + scrollOffset;
+        highlight.setTranslationY(rect.top - padY);
+        float x = rect.left - padX + scrollOffset;
         if (!highlightShown || !animate || !animations) {
             spring.cancel();
             highlight.setTranslationX(x - scrollOffset);
@@ -147,7 +162,7 @@ final class AppLibraryDialog {
      *  setups are unaffected. See LibraryApps.excludedFromCatalog(). */
     private final Set<String> excludedApps;
 
-    AppLibraryDialog(Activity activity, boolean animations, boolean reducedMotion, boolean selectionMode, boolean okOpens, Predicate<String> onHome, Runnable changed, Runnable dismissed, Set<String> excludedApps) {
+    AppLibraryDialog(Activity activity, boolean animations, boolean reducedMotion, boolean selectionMode, boolean okOpens, Predicate<String> onHome, Runnable changed, Runnable dismissed, Set<String> excludedApps, AppAdapter tiles) {
         this.activity = activity;
         this.animations = animations;
         this.rtl = activity.getResources().getBoolean(R.bool.rtl_app_grid);
@@ -158,6 +173,8 @@ final class AppLibraryDialog {
         this.changed = changed;
         this.dismissed = dismissed;
         this.excludedApps = excludedApps;
+        this.tiles = tiles;
+        this.grid = tiles != null;
         density = activity.getResources().getDisplayMetrics().density;
         panel = new LinearLayout(activity);
         panel.setLayoutDirection(rtl ? View.LAYOUT_DIRECTION_RTL : View.LAYOUT_DIRECTION_LTR);
@@ -167,7 +184,8 @@ final class AppLibraryDialog {
         View decor = activity.getWindow().getDecorView();
         catalogWidth = Math.min(dp(800), Math.max(dp(200), decor.getWidth() - dp(64)));
         int width = catalogWidth;
-        int height = dp(280);
+        catalogHeight = grid ? Math.min(dp(640), Math.max(dp(280), decor.getHeight() - dp(80))) : dp(280);
+        int height = catalogHeight;
         popup = new PopupWindow(panel, width, height, true);
         popup.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
         popup.setOutsideTouchable(true);
@@ -177,6 +195,7 @@ final class AppLibraryDialog {
             dismissActions();
             stopHighlight();
             icons.clear();
+            art.clear();
             dismissed.run();
         });
     }
@@ -350,7 +369,7 @@ final class AppLibraryDialog {
 
     private void showCatalog() {
         stopHighlight();
-        resize(catalogWidth, dp(280));
+        resize(catalogWidth, catalogHeight);
         panel.removeAllViews();
         LinearLayout header = new LinearLayout(activity);
         header.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
@@ -392,9 +411,18 @@ final class AppLibraryDialog {
         RecyclerView list = new RecyclerView(activity);
         list.setLayoutDirection(rtl ? View.LAYOUT_DIRECTION_RTL : View.LAYOUT_DIRECTION_LTR);
         catalog = list;
-        list.setLayoutManager(new LinearLayoutManager(activity, RecyclerView.HORIZONTAL, false) {
-            @Override protected boolean isLayoutRTL() { return rtl; }
-        });
+        if (grid) {
+            // Cards are 132dp plus 6dp margins on each side; as many columns as the panel holds.
+            int inner = catalogWidth - panel.getPaddingLeft() - panel.getPaddingRight() - dp(20);
+            gridColumns = Math.max(1, inner / dp(144));
+            list.setLayoutManager(new GridLayoutManager(activity, gridColumns, RecyclerView.VERTICAL, false) {
+                @Override protected boolean isLayoutRTL() { return rtl; }
+            });
+        } else {
+            list.setLayoutManager(new LinearLayoutManager(activity, RecyclerView.HORIZONTAL, false) {
+                @Override protected boolean isLayoutRTL() { return rtl; }
+            });
+        }
         list.setItemAnimator(null);
         list.setOverScrollMode(View.OVER_SCROLL_NEVER);
         list.setClipToPadding(false);
@@ -418,6 +446,8 @@ final class AppLibraryDialog {
             @Override public void onScrolled(@NonNull RecyclerView rv, int dx, int dy) {
                 scrollOffset += dx;
                 highlight.setTranslationX(highlight.getTranslationX() - dx);
+                // library_grid scrolls vertically: the glass follows the card up or down (dy is 0 in a row).
+                highlight.setTranslationY(highlight.getTranslationY() - dy);
             }
         });
         panel.addView(shelf, new LinearLayout.LayoutParams(-1, 0, 1));
@@ -466,7 +496,7 @@ final class AppLibraryDialog {
             if (holder != null) {
                 View card = holder.itemView;
                 RecyclerView.LayoutParams params = (RecyclerView.LayoutParams) card.getLayoutParams();
-                selectedOffset = rtl
+                selectedOffset = grid ? 0 : rtl
                         ? catalog.getWidth() - catalog.getPaddingRight()
                             - catalog.getLayoutManager().getDecoratedRight(card) - params.rightMargin
                         : catalog.getLayoutManager().getDecoratedLeft(card)
@@ -495,7 +525,7 @@ final class AppLibraryDialog {
             if (holder != null) {
                 View card = holder.itemView;
                 RecyclerView.LayoutParams params = (RecyclerView.LayoutParams) card.getLayoutParams();
-                selectedOffset = rtl
+                selectedOffset = grid ? 0 : rtl
                         ? catalog.getWidth() - catalog.getPaddingRight()
                             - catalog.getLayoutManager().getDecoratedRight(card) - params.rightMargin
                         : catalog.getLayoutManager().getDecoratedLeft(card)
@@ -607,8 +637,14 @@ final class AppLibraryDialog {
 
     private int dp(int value) { return Math.round(value * density); }
 
-    private final class Catalog extends RecyclerView.Adapter<Row> {
-        @NonNull @Override public Row onCreateViewHolder(@NonNull ViewGroup parent, int type) {
+    private final class Catalog extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
+        @NonNull @Override public RecyclerView.ViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int type) {
+            if (grid) {
+                // A column's width, less room for the focus zoom and the glass around it.
+                int width = parent.getWidth() > 0 ? parent.getWidth() : parent.getMeasuredWidth();
+                int cell = (width - parent.getPaddingLeft() - parent.getPaddingRight()) / gridColumns;
+                return tiles.newTile(parent, Math.max(dp(80), cell - dp(24)), tileListener);
+            }
             FrameLayout row = new FrameLayout(activity);
             RecyclerView.LayoutParams params = new RecyclerView.LayoutParams(dp(132), dp(170));
             params.setMargins(dp(6), dp(2), dp(6), dp(2));
@@ -643,9 +679,13 @@ final class AppLibraryDialog {
             row.addView(check, badge);
             return new Row(row);
         }
-        @Override public void onBindViewHolder(@NonNull Row holder, int position) {
+        @Override public void onBindViewHolder(@NonNull RecyclerView.ViewHolder holder, int position) {
             ResolveInfo app = apps.get(position);
             String pkg = app.activityInfo.packageName;
+            if (grid) {
+                bindTile((AppAdapter.Holder) holder, app);
+                return;
+            }
             bindIcon(holder.itemView.findViewById(R.id.icon), app);
             TextView name = holder.itemView.findViewById(R.id.title);
             name.setText(label(app));
@@ -662,20 +702,10 @@ final class AppLibraryDialog {
             if (home) check.setBackgroundResource(R.drawable.library_check);
             else check.setBackground(surface(0xFF70D9A0, 8));
             check.setVisibility(home || recent ? View.VISIBLE : View.GONE);
-            holder.itemView.setOnClickListener(v -> {
-                boolean onHomeNow = onHome.test(pkg);
-                if (LibraryApps.okOpens(selectionMode, okOpens, onHomeNow)) open(app);
-                else changeHome(app, !onHomeNow);
-            });
+            holder.itemView.setOnClickListener(v -> press(app));
             holder.itemView.setOnLongClickListener(selectionMode ? null : v -> { showActions(app, v); return true; });
             holder.itemView.setOnFocusChangeListener((v, focused) -> {
-                if (focused) {
-                    selectedPackage = pkg;
-                    instructions.setText(hint(onHome.test(pkg)));
-                    v.post(() -> { if (v.hasFocus() && catalog != null) highlight(v, true); });
-                    int index = holder.getBindingAdapterPosition();
-                    if (index != RecyclerView.NO_POSITION) selectedPosition = index;
-                }
+                if (focused) focused(v, holder.getBindingAdapterPosition(), app);
             });
             holder.itemView.setOnKeyListener((v, key, event) -> {
                 int index = holder.getBindingAdapterPosition();
@@ -686,6 +716,72 @@ final class AppLibraryDialog {
             });
         }
         @Override public int getItemCount() { return apps.size(); }
+    }
+
+    /** OK on an app: open it, or add it to Home or take it off, by the library's mode. */
+    private void press(ResolveInfo app) {
+        boolean onHomeNow = onHome.test(app.activityInfo.packageName);
+        if (LibraryApps.okOpens(selectionMode, okOpens, onHomeNow)) open(app);
+        else changeHome(app, !onHomeNow);
+    }
+
+    /** An app took the focus: remember it, say what OK does (and, on a tile with no name of its own, whose it is). */
+    private void focused(View v, int index, ResolveInfo app) {
+        String pkg = app.activityInfo.packageName;
+        selectedPackage = pkg;
+        String hint = hint(onHome.test(pkg));
+        instructions.setText(grid ? label(app) + " \u00b7 " + hint : hint);
+        v.post(() -> { if (v.hasFocus() && catalog != null) highlight(v, true); });
+        if (index != RecyclerView.NO_POSITION) selectedPosition = index;
+    }
+
+    /** library_grid: an app as a Home tile, by Home's own bindLook; its artwork loads once, off the UI thread. */
+    private void bindTile(AppAdapter.Holder h, ResolveInfo app) {
+        String pkg = app.activityInfo.packageName;
+        h.card.setTag(pkg);
+        Drawable[] loaded = art.get(pkg);
+        tiles.bindLook(h, loaded == null ? null : loaded[0], loaded == null ? null : loaded[1], label(app), null);
+        h.card.setOnClickListener(v -> press(app));
+        h.card.setOnLongClickListener(selectionMode ? null : v -> { showActions(app, v); return true; });
+        if (loaded != null || !artLoading.add(pkg)) return;
+        LOADER.execute(() -> {
+            Drawable[] result;
+            try { result = tiles.art(app, false); }
+            catch (RuntimeException unavailable) { result = new Drawable[] {null, activity.getDrawable(R.drawable.ic_apps)}; }
+            Drawable[] shown = result;
+            main.post(() -> {
+                artLoading.remove(pkg);
+                if (closed) return;
+                art.put(pkg, shown);
+                // The tile may show another app by now; a tile bound to this one later takes it from the cache.
+                if (pkg.equals(h.card.getTag())) tiles.bindLook(h, shown[0], shown[1], label(app), null);
+            });
+        });
+    }
+
+    /** library_grid: Home's TileListener for the grid's tiles; only the focus and the D-pad edges matter here. */
+    private final AppAdapter.TileListener tileListener = new AppAdapter.TileListener() {
+        @Override public void onTileFocused(int position, View card) {
+            if (position >= 0 && position < apps.size()) focused(card, position, apps.get(position));
+        }
+        @Override public boolean onTileVerticalKey(int position, int keyCode) {
+            return position != RecyclerView.NO_POSITION && gridEdge(position, keyCode);
+        }
+        @Override public void onLibraryRequested() { }
+        @Override public void onLibraryFocused() { }
+        @Override public void onTileLongPress(int position, View card) { }
+        @Override public void onLibraryUp() { }
+        @Override public void onOpenInput(String inputId) { }
+    };
+
+    /** library_grid: the keys that would leave the grid at its edges, so the focus stays inside the panel. */
+    private boolean gridEdge(int index, int key) {
+        int column = index % gridColumns;
+        return key == KeyEvent.KEYCODE_DPAD_UP && index < gridColumns
+                || key == KeyEvent.KEYCODE_DPAD_DOWN && index / gridColumns == (apps.size() - 1) / gridColumns
+                || (rtl ? key == KeyEvent.KEYCODE_DPAD_RIGHT : key == KeyEvent.KEYCODE_DPAD_LEFT) && column == 0
+                || (rtl ? key == KeyEvent.KEYCODE_DPAD_LEFT : key == KeyEvent.KEYCODE_DPAD_RIGHT)
+                    && (column == gridColumns - 1 || index == apps.size() - 1);
     }
 
     private static final class Row extends RecyclerView.ViewHolder {

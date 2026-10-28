@@ -87,6 +87,7 @@
     <string name="tile_move">Verplaatsen</string>
     <string name="reorder_hint">OK pakt een app op, de pijlen verplaatsen hem, Terug zet hem neer. Nog eens Terug om te stoppen.</string>
     <string name="reorder_not_saved">Kon de nieuwe volgorde niet opslaan</string>
+    <string name="all_apps">Alle apps</string>
     <string name="app_library">Appbibliotheek</string>
     <string name="library_empty">Geen apps gevonden die je kunt openen</string>
     <string name="library_on_home">Op Home</string>
@@ -102,7 +103,7 @@
         <item quantity="one">%1$d app</item>
         <item quantity="other">%1$d apps</item>
     </plurals>
-    <string name="greeting_with_name">%1$s, %2$s</string>
+    <string name="greeting_with_name">%1$s %2$s</string>
 
     <string name="race_kicker">Ronde %1$d · %2$s · %3$s</string>
     <string name="race_kicker_no_place">Ronde %1$d · %2$s</string>
