@@ -37,6 +37,11 @@ final class WallpaperPlayer {
     private final List<File> files;
     private final long interval;
     private final String order;
+    /** wallpaper_rotation_seconds: the player times its own changes; Home's minute tick is too coarse for them. */
+    private final boolean selfTimed;
+    /** wallpaper_release_before_load: the picture on screen is freed before the next one is decoded. */
+    private final boolean releaseFirst;
+    private final Runnable tick = this::onTick;
     private final SharedPreferences preferences;
     private final ExecutorService decoder = Executors.newSingleThreadExecutor();
     private final Random random = new Random();
@@ -66,7 +71,9 @@ final class WallpaperPlayer {
         this.root = root;
         backgroundColor = config.backgroundColor;
         files = new ArrayList<>(config.wallpapers);
-        interval = config.wallpaperRotationMinutes * 60_000L;
+        interval = config.wallpaperIntervalMs();
+        selfTimed = config.wallpaperRotationSeconds > 0;
+        releaseFirst = config.wallpaperReleaseFirst;
         bitmapConfig = config.wallpaperTrueColor ? Bitmap.Config.ARGB_8888 : Bitmap.Config.RGB_565;
         // The dim is painted into the picture (decode), so no full-screen shade layer is drawn on every frame.
         dimColor = config.wallpaperDim > 0 ? (config.wallpaperDim * 255 / 100) << 24 : 0;
@@ -80,7 +87,7 @@ final class WallpaperPlayer {
         String collection = collectionKey(files);
         if (!collection.equals(preferences.getString("collection", ""))) {
             preferences.edit().putString("collection", collection)
-                    .remove("image").remove("changed").apply();
+                    .remove("image").remove("changed").remove("bag").remove("bag_position").apply();
         }
         DisplayMetrics metrics = context.getResources().getDisplayMetrics();
         width = metrics.widthPixels;
@@ -107,7 +114,7 @@ final class WallpaperPlayer {
         String previous = preferences.getString("image", "");
         List<File> playable = playable();
         File first = WallpaperRotation.find(playable, previous);
-        if (first == null) first = WallpaperRotation.pick(playable, previous, order, random);
+        if (first == null) first = pickNext(playable, previous);
         while (first != null) {
             Bitmap bitmap = decode(first);
             if (bitmap != null) {
@@ -119,22 +126,62 @@ final class WallpaperPlayer {
                 if (!displayed.equals(previous)) {
                     preferences.edit().putString("image", displayed)
                             .putLong("changed", System.currentTimeMillis()).apply();
+                    logShown();
                 }
                 return;
             }
             files.remove(first);   // unreadable or over 4K: try another, or keep the plain colour
             playable = playable();
-            first = WallpaperRotation.pick(playable, previous, order, random);
+            first = pickNext(playable, previous);
         }
     }
 
     void start() {
         active = true;
         update();
+        scheduleTick();
     }
 
     void stop() {
         active = false;
+        root.removeCallbacks(tick);
+    }
+
+    /** The next picture: the bag's next one (its round kept in the preferences), or WallpaperRotation's pick. */
+    private File pickNext(List<File> playable, String previous) {
+        if (!WallpaperRotation.ORDER_BAG.equals(order)) return WallpaperRotation.pick(playable, previous, order, random);
+        WallpaperRotation.Bag bag = WallpaperRotation.Bag.decode(
+                preferences.getString("bag", ""), preferences.getInt("bag_position", -1));
+        WallpaperRotation.Bag next = WallpaperRotation.nextInBag(playable, bag, previous, random);
+        if (next == null) return null;
+        preferences.edit().putString("bag", next.encoded()).putInt("bag_position", next.position).apply();
+        return WallpaperRotation.find(playable, next.current());
+    }
+
+    /** wallpaper_rotation_seconds: change the picture, then wait for the next one. */
+    private void onTick() {
+        update();
+        scheduleTick();
+    }
+
+    /** wallpaper_rotation_seconds: the next tick, an interval after the last change (at least a second away). */
+    private void scheduleTick() {
+        if (!selfTimed || !active || closed) return;
+        long since = System.currentTimeMillis() - preferences.getLong("changed", 0);
+        long delay = Math.max(1_000L, Math.min(interval, interval - since));
+        root.removeCallbacks(tick);
+        root.postDelayed(tick, delay);
+    }
+
+    /** One line per change, for following a rotation in logcat: the picture and, in a bag, its place in the round. */
+    private void logShown() {
+        String place = "";
+        if (WallpaperRotation.ORDER_BAG.equals(order)) {
+            WallpaperRotation.Bag bag = WallpaperRotation.Bag.decode(
+                    preferences.getString("bag", ""), preferences.getInt("bag_position", -1));
+            if (bag != null) place = " (" + (bag.position + 1) + "/" + bag.order.size() + ")";
+        }
+        Log.i("TvHome.Wallpaper", "Showing " + displayed + place);
     }
 
     /** Drops the wallpaper texture when Home is hidden and Android asks the process to free memory. */
@@ -162,6 +209,7 @@ final class WallpaperPlayer {
     void close() {
         active = false;
         closed = true;
+        root.removeCallbacks(tick);
         decoder.shutdownNow();
     }
 
@@ -173,12 +221,12 @@ final class WallpaperPlayer {
         File selected = WallpaperRotation.find(playable, previous);
         long changed = preferences.getLong("changed", 0);
         if (selected == null || WallpaperRotation.due(changed, System.currentTimeMillis(), interval)) {
-            selected = WallpaperRotation.pick(playable, previous, order, random);
+            selected = pickNext(playable, previous);
         }
         if (selected == null || selected.getName().equals(displayed)) return;
         File next = selected;
         loading = true;
-        decoder.execute(() -> {
+        Runnable load = () -> {
             Bitmap bitmap = decode(next);
             root.post(() -> {
                 loading = false;
@@ -198,9 +246,30 @@ final class WallpaperPlayer {
                 if (!displayed.equals(previous) || changed == 0) {
                     preferences.edit().putString("image", displayed)
                             .putLong("changed", System.currentTimeMillis()).apply();
+                    logShown();
                 }
+                scheduleTick();
             });
-        });
+        };
+        Bitmap old = current;
+        if (!releaseFirst || old == null) {
+            decoder.execute(load);
+            return;
+        }
+        // wallpaper_release_before_load: only one picture is ever held. The plain background shows while the next
+        // one decodes; the old bitmap is recycled once a frame without it has been drawn, then the decode starts.
+        current = null;
+        displayed = "";
+        image.setImageDrawable(null);
+        root.setBackgroundColor(backgroundColor);
+        image.postDelayed(() -> {
+            old.recycle();
+            if (closed) {
+                loading = false;
+                return;
+            }
+            decoder.execute(load);
+        }, 100);
     }
 
     /**

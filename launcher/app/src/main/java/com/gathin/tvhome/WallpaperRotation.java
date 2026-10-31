@@ -13,9 +13,79 @@ final class WallpaperRotation {
     /** Playback orders persisted in config.json (wallpaper_order). */
     static final String ORDER_SEQUENTIAL = "sequential";
     static final String ORDER_SHUFFLE = "shuffle";
+    /** Every picture once per round, in a new shuffled order each round (wallpaper_shuffle "bag"). */
+    static final String ORDER_BAG = "bag";
 
     static boolean validOrder(String order) {
-        return ORDER_SEQUENTIAL.equals(order) || ORDER_SHUFFLE.equals(order);
+        return ORDER_SEQUENTIAL.equals(order) || ORDER_SHUFFLE.equals(order) || ORDER_BAG.equals(order);
+    }
+
+    /**
+     * wallpaper_shuffle, when a theme sets it, in wallpaper_order's terms: none plays the folder in order, random is
+     * the historical shuffle, bag the round-based one. Anything else (or no key) keeps {@code order}.
+     */
+    static String orderFor(String shuffle, String order) {
+        if ("none".equals(shuffle)) return ORDER_SEQUENTIAL;
+        if ("random".equals(shuffle)) return ORDER_SHUFFLE;
+        if (ORDER_BAG.equals(shuffle)) return ORDER_BAG;
+        return order;
+    }
+
+    /** A bag round: the shuffled names of the collection and the position of the picture on screen. */
+    static final class Bag {
+        final List<String> order;
+        final int position;
+
+        Bag(List<String> order, int position) {
+            this.order = order;
+            this.position = position;
+        }
+
+        String current() {
+            return order.get(position);
+        }
+
+        /** The round as stored in the rotation's preferences: one name per line. */
+        String encoded() {
+            return String.join("\n", order);
+        }
+
+        /** A stored round, or null when there is none or its position does not fit it. */
+        static Bag decode(String encoded, int position) {
+            if (encoded == null || encoded.isEmpty()) return null;
+            List<String> order = Arrays.asList(encoded.split("\n"));
+            return position >= 0 && position < order.size() ? new Bag(order, position) : null;
+        }
+    }
+
+    /**
+     * The step after {@code bag}: the next picture of the round, or the first of a newly shuffled round once every
+     * picture has been on screen. A round that no longer matches the collection (pictures added or removed) is
+     * replaced by a new one. A new round never opens with {@code previous}, the picture on screen, so no picture
+     * shows twice in a row across the seam between two rounds. Null for an empty collection.
+     */
+    static Bag nextInBag(List<File> images, Bag bag, String previous, Random random) {
+        List<String> names = new ArrayList<>();
+        for (File image : images) names.add(image.getName());
+        if (names.isEmpty()) return null;
+        if (bag == null || !sameNames(bag.order, names) || bag.position + 1 >= bag.order.size()) {
+            return new Bag(shuffledRound(names, previous, random), 0);
+        }
+        return new Bag(bag.order, bag.position + 1);
+    }
+
+    /** {@code names} in a random order whose first entry is not {@code avoidFirst} (when there is a choice). */
+    static List<String> shuffledRound(List<String> names, String avoidFirst, Random random) {
+        List<String> round = new ArrayList<>(names);
+        Collections.shuffle(round, random);
+        if (round.size() > 1 && round.get(0).equals(avoidFirst)) {
+            Collections.swap(round, 0, 1 + random.nextInt(round.size() - 1));
+        }
+        return round;
+    }
+
+    private static boolean sameNames(List<String> a, List<String> b) {
+        return a.size() == b.size() && new java.util.HashSet<>(a).equals(new java.util.HashSet<>(b));
     }
 
     static List<File> images(File directory) {

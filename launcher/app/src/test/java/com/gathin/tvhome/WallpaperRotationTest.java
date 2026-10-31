@@ -19,6 +19,70 @@ import org.junit.Test;
 
 public class WallpaperRotationTest {
 
+    private static List<File> pictures(int count) {
+        List<File> files = new java.util.ArrayList<>();
+        for (int i = 1; i <= count; i++) files.add(new File(String.format("foto-%03d.jpg", i)));
+        return files;
+    }
+
+    @Test
+    public void bagShowsEveryPictureOncePerRoundAndNeverRepeatsAcrossTheSeam() {
+        List<File> images = pictures(7);
+        Random random = new Random(42);
+        WallpaperRotation.Bag bag = null;
+        String previous = "";
+        for (int round = 0; round < 50; round++) {
+            java.util.Set<String> seen = new java.util.HashSet<>();
+            for (int i = 0; i < images.size(); i++) {
+                bag = WallpaperRotation.nextInBag(images, bag, previous, random);
+                assertNotEquals("a picture twice in a row", previous, bag.current());
+                assertTrue("a picture twice in one round", seen.add(bag.current()));
+                previous = bag.current();
+            }
+            assertEquals(images.size(), seen.size());
+        }
+    }
+
+    @Test
+    public void bagSurvivesBeingStoredAndRestored() {
+        List<File> images = pictures(5);
+        Random random = new Random(7);
+        WallpaperRotation.Bag bag = WallpaperRotation.nextInBag(images, null, "", random);
+        bag = WallpaperRotation.nextInBag(images, bag, bag.current(), random);
+        WallpaperRotation.Bag restored = WallpaperRotation.Bag.decode(bag.encoded(), bag.position);
+        assertEquals(bag.order, restored.order);
+        assertEquals(bag.current(), restored.current());
+        // The restored round carries on where it was, it does not start over.
+        WallpaperRotation.Bag next = WallpaperRotation.nextInBag(images, restored, restored.current(), random);
+        assertEquals(bag.order, next.order);
+        assertEquals(bag.position + 1, next.position);
+        assertNull(WallpaperRotation.Bag.decode("", 0));
+        assertNull(WallpaperRotation.Bag.decode(bag.encoded(), 5));
+    }
+
+    @Test
+    public void bagStartsANewRoundWhenTheCollectionChanges() {
+        List<File> images = pictures(5);
+        Random random = new Random(3);
+        WallpaperRotation.Bag bag = WallpaperRotation.nextInBag(images, null, "", random);
+        bag = WallpaperRotation.nextInBag(images, bag, bag.current(), random);
+        List<File> grown = pictures(6);
+        WallpaperRotation.Bag next = WallpaperRotation.nextInBag(grown, bag, bag.current(), random);
+        assertEquals(0, next.position);
+        assertEquals(6, next.order.size());
+        assertNotEquals(bag.current(), next.current());
+        assertNull(WallpaperRotation.nextInBag(Collections.emptyList(), bag, "", random));
+    }
+
+    @Test
+    public void shuffleKeyMapsOntoTheOrderAndLeavesOtherThemesAlone() {
+        assertEquals(WallpaperRotation.ORDER_SEQUENTIAL, WallpaperRotation.orderFor("none", "shuffle"));
+        assertEquals(WallpaperRotation.ORDER_SHUFFLE, WallpaperRotation.orderFor("random", "sequential"));
+        assertEquals(WallpaperRotation.ORDER_BAG, WallpaperRotation.orderFor("bag", "shuffle"));
+        assertEquals("sequential", WallpaperRotation.orderFor(null, "sequential"));
+        assertEquals("shuffle", WallpaperRotation.orderFor("sometimes", "shuffle"));
+    }
+
     private static File touch(File dir, String name, int bytes) throws IOException {
         File f = new File(dir, name);
         try (FileOutputStream out = new FileOutputStream(f)) {

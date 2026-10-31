@@ -191,6 +191,10 @@ final class Config {
     /** Rotating theme images, or the single wallpaper when no collection is configured. */
     final List<File> wallpapers;
     final int wallpaperRotationMinutes;
+    /** wallpaper_rotation_seconds: the rotation interval in seconds, ahead of the minutes when set; 0 when not. */
+    final int wallpaperRotationSeconds;
+    /** wallpaper_release_before_load: free the picture on screen before the next one is decoded. */
+    final boolean wallpaperReleaseFirst;
     final int wallpaperDim;
     /** The dock band's opacity in percent (config.json dock_opacity, 30-100): below 100 the wallpaper shows through. */
     final int dockOpacity;
@@ -299,7 +303,8 @@ final class Config {
                    Map<String, Set<String>> wallpaperMoods, boolean gamepadPassthrough, boolean consumeVolumeKeys, boolean powerOnHome, boolean homeLongPressHome, boolean wifiStatusWarnings, List<String> topBarApps, boolean showGreeting, boolean headerWhite, boolean clockWallpaper, int clockWallpaperDim, boolean clockGlow, String glassStyle, boolean singleRow, boolean dockBandAll, boolean lunarDate, int lunarUtcOffset, boolean dateBelowClock, boolean vpnPill, String locale, boolean powerOnHomeAlways, boolean inputsConnectedOnly,
                    int openOnStartNetworkWait, int bottomShade, float tileAlphaIdle, float tileAlphaFocus,
                    float tileGrayscaleIdle, boolean dockOnly, boolean libraryGrid,
-                   int dockBottomMarginDp, boolean libraryGrayscale, float libraryTileAlphaIdle) {
+                   int dockBottomMarginDp, boolean libraryGrayscale, float libraryTileAlphaIdle,
+                   int wallpaperRotationSeconds, boolean wallpaperReleaseFirst) {
         this.handleViewInputs = handleViewInputs;
         this.tileMenu = tileMenu;
         this.inputKeycodes = inputKeycodes;
@@ -371,6 +376,8 @@ final class Config {
         this.wallpaper = wallpaper;
         this.wallpapers = Collections.unmodifiableList(wallpapers);
         this.wallpaperRotationMinutes = wallpaperRotationMinutes;
+        this.wallpaperRotationSeconds = wallpaperRotationSeconds;
+        this.wallpaperReleaseFirst = wallpaperReleaseFirst;
         this.wallpaperDim = wallpaperDim;
         this.dockOpacity = dockOpacity;
         this.wallpaperOrder = wallpaperOrder;
@@ -689,6 +696,10 @@ final class Config {
         boolean wallpaperEnabled = json == null || bool(json, "wallpaper", true);
         if (!wallpaperEnabled) wallpaper = null;
         int rotationMinutes = json == null ? 0 : integer(json, "wallpaper_rotation_minutes", 0, 0, 1440);
+        // A whole number of seconds, ahead of the minutes when set; under 5 is taken as 5, so a typo cannot spin it.
+        int rotationSeconds = json == null ? 0 : integer(json, "wallpaper_rotation_seconds", 0, 0, 86400);
+        if (rotationSeconds > 0 && rotationSeconds < 5) rotationSeconds = 5;
+        boolean wallpaperReleaseFirst = json != null && bool(json, "wallpaper_release_before_load", false);
         int wallpaperDim = json == null ? 0 : integer(json, "wallpaper_dim", 0, 0, 90);
         int dockOpacity = json == null ? 100 : integer(json, "dock_opacity", 100, 30, 100);
         dockOpacity = chosenDockOpacity(choices.getInt(DOCK_OPACITY_KEY, -1), dockOpacity);
@@ -696,8 +707,10 @@ final class Config {
                 : string(json, "wallpaper_order", WallpaperRotation.ORDER_SHUFFLE);
         // An unknown order must not silently change how an existing collection rotates.
         if (!WallpaperRotation.validOrder(wallpaperOrder)) wallpaperOrder = WallpaperRotation.ORDER_SHUFFLE;
+        // wallpaper_shuffle (none, random or bag) wins over wallpaper_order when a theme sets it.
+        if (json != null) wallpaperOrder = WallpaperRotation.orderFor(string(json, "wallpaper_shuffle", ""), wallpaperOrder);
         List<File> wallpapers = new ArrayList<>();
-        if (rotationMinutes > 0 && dir != null && wallpaperEnabled) {
+        if ((rotationMinutes > 0 || rotationSeconds > 0) && dir != null && wallpaperEnabled) {
             wallpapers.addAll(WallpaperRotation.images(new File(dir, "wallpapers")));
         }
         if (wallpapers.isEmpty() && wallpaper != null) wallpapers.add(wallpaper);
@@ -732,7 +745,8 @@ final class Config {
                 dateBelowClock, vpnPill, locale, powerOnHomeAlways, inputsConnectedOnly,
                 Math.max(0, Math.min(600, openOnStartNetworkWait)), Math.max(0, Math.min(100, bottomShade)), tileAlphaIdle, tileAlphaFocus,
                 tileGrayscaleIdle, dockOnly, libraryGrid, Math.max(-1, Math.min(300, dockBottomMarginDp)),
-                libraryGrayscale, libraryTileAlphaIdle < 0f ? tileAlphaIdle : libraryTileAlphaIdle);
+                libraryGrayscale, libraryTileAlphaIdle < 0f ? tileAlphaIdle : libraryTileAlphaIdle,
+                rotationSeconds, wallpaperReleaseFirst);
     }
 
     /**
@@ -880,6 +894,11 @@ final class Config {
     private static boolean bool(JSONObject o, String key, boolean fallback) {
         Object v = o.opt(key);
         return v instanceof Boolean ? (Boolean) v : fallback;
+    }
+
+    /** The rotation interval: wallpaper_rotation_seconds when set, else wallpaper_rotation_minutes; 0 holds still. */
+    long wallpaperIntervalMs() {
+        return wallpaperRotationSeconds > 0 ? wallpaperRotationSeconds * 1000L : wallpaperRotationMinutes * 60_000L;
     }
 
     /** A number from 0 to 1 (tile_alpha_idle, tile_alpha_focus, tile_grayscale_idle); anything else keeps the fallback. */
